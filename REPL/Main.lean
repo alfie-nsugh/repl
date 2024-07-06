@@ -208,11 +208,7 @@ def runCommand (s : Command) : M IO (CommandResponse ⊕ Error) := do
   let cmdSnapshot :=
   { cmdState
     cmdContext := (cmdSnapshot?.map fun c => c.cmdContext).getD
-      { fileName := "",
-        fileMap := default,
-        tacticCache? := none,
-        snap? := none,
-        cancelTk? := none } }
+      { fileName := "", fileMap := default, tacticCache? := none } }
   let env ← recordCommandSnapshot cmdSnapshot
   let jsonTrees := match s.infotree with
   | some "full" => trees
@@ -220,23 +216,16 @@ def runCommand (s : Command) : M IO (CommandResponse ⊕ Error) := do
   | some "original" => trees.bind InfoTree.retainTacticInfo |>.bind InfoTree.retainOriginal
   | some "substantive" => trees.bind InfoTree.retainTacticInfo |>.bind InfoTree.retainSubstantive
   | _ => []
-  let infotree ← if jsonTrees.isEmpty then
-    pure none
+  let infotree := if jsonTrees.isEmpty then
+    none
   else
-    pure <| some <| Json.arr (← jsonTrees.toArray.mapM fun t => t.toJson none)
+    some <| Json.arr (← jsonTrees.toArray.mapM fun t => t.toJson none)
   return .inl
     { env,
       messages,
       sorries,
       tactics
       infotree }
-
-def processFile (s : File) : M IO (CommandResponse ⊕ Error) := do
-  try
-    let cmd ← IO.FS.readFile s.path
-    runCommand { s with env := none, cmd }
-  catch e =>
-    pure <| .inr ⟨e.toString⟩
 
 /--
 Run a single tactic, returning the id of the new proof statement, and the new goals.
@@ -272,7 +261,6 @@ instance [ToJson α] [ToJson β] : ToJson (α ⊕ β) where
 /-- Commands accepted by the REPL. -/
 inductive Input
 | command : REPL.Command → Input
-| file : REPL.File → Input
 | proofStep : REPL.ProofStep → Input
 | pickleEnvironment : REPL.PickleEnvironment → Input
 | unpickleEnvironment : REPL.UnpickleEnvironment → Input
@@ -297,8 +285,6 @@ def parse (query : String) : IO Input := do
     | .ok (r : REPL.UnpickleProofState) => return .unpickleProofSnapshot r
     | .error _ => match fromJson? j with
     | .ok (r : REPL.Command) => return .command r
-    | .error _ => match fromJson? j with
-    | .ok (r : REPL.File) => return .file r
     | .error e => throw <| IO.userError <| toString <| toJson <|
         (⟨"Could not parse as a valid JSON command:\n" ++ e⟩ : Error)
 
@@ -312,7 +298,6 @@ where loop : M IO Unit := do
   if query.startsWith "#" || query.startsWith "--" then loop else
   IO.println <| toString <| ← match ← parse query with
   | .command r => return toJson (← runCommand r)
-  | .file r => return toJson (← processFile r)
   | .proofStep r => return toJson (← runProofStep r)
   | .pickleEnvironment r => return toJson (← pickleCommandSnapshot r)
   | .unpickleEnvironment r => return toJson (← unpickleCommandSnapshot r)
